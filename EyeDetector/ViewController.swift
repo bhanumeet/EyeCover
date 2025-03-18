@@ -18,7 +18,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     var retakeButton: UIButton!
     var saveButton: UIButton!
     var capturedImageView: UIImageView!
-    var whiteBoxView: UIView!
     var isFlashOn = false
     var photoOutput: AVCapturePhotoOutput!
     var capturedImage: UIImage?
@@ -31,22 +30,23 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     var originalTextFieldFrame: CGRect!
     var recordedBoundingBoxes: [CGRect] = []
     var captureResult: String = ""
+    var result: String = ""
+    
+    // Labels for real-time display
+    var captureResultLabel: UILabel!
+    var distanceLabel: UILabel!  // Label to display proximity info
     
     let maxFrames = 100
     var frameCount = 0
-    
     var consecutiveOneEyeFrames: Int = 0
     var oneEyeDetectionWindow: [Bool] = []
     let windowSize = 10
     
     // One-eye counters:
-    // Mapping:
-    // • If the detected eye is "left" then left is visible and right is closed → we increment oneEyeLeftCount and eventually report "RC" (right closed).
-    // • If the detected eye is "right" then right is visible and left is closed → we increment oneEyeRightCount and eventually report "LC" (left closed).
     var oneEyeLeftCount: Int = 0   // corresponds to events where detected eye was "left" → result should be "RC"
     var oneEyeRightCount: Int = 0  // corresponds to events where detected eye was "right" → result should be "LC"
     
-    // Added property to store the original screen brightness.
+    // Store the original screen brightness.
     var originalBrightness: CGFloat = UIScreen.main.brightness
     
     // MARK: - Lifecycle
@@ -61,12 +61,12 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         setupCapturedImageView()
         setupRetakeButton()
         setupSaveButton()
-        setupWhiteBoxView()
         setupFaceDetection()
         setupFaceOverlay()
         setupCaptureModeLabel()
         setupTextField()
         setupRadioButtons()
+        setupDistanceLabel()  // NEW: Setup label to show proximity info
         
         bringButtonsToFront()
         
@@ -75,8 +75,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     }
     
     deinit {
-        NotificationCenter.default.removeObserver(self, name: UIResponder.keyboardWillShowNotification, object: nil)
-        NotificationCenter.default.removeObserver(self, name: UIResponder.keyboardWillHideNotification, object: nil)
+        NotificationCenter.default.removeObserver(self)
     }
     
     // MARK: - Setup Methods
@@ -97,51 +96,42 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     
     private func setupCamera() {
         captureSession = AVCaptureSession()
-        captureSession.sessionPreset = .photo
+        captureSession.sessionPreset = .high
         configureCamera(for: currentCameraPosition)
         
         previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer.videoGravity = .resizeAspectFill
         previewLayer.frame = view.layer.bounds
-        
-        // Mirror the front camera video so LC and RC appear as expected.
         if let connection = previewLayer.connection {
             connection.automaticallyAdjustsVideoMirroring = false
             connection.isVideoMirrored = (currentCameraPosition == .front)
         }
-        
         view.layer.addSublayer(previewLayer)
         
         photoOutput = AVCapturePhotoOutput()
+        photoOutput.isHighResolutionCaptureEnabled = true
         captureSession.addOutput(photoOutput)
-        
         captureSession.startRunning()
     }
     
     private func configureCamera(for position: AVCaptureDevice.Position) {
         captureSession.beginConfiguration()
-        
         if let currentInput = captureSession.inputs.first {
             captureSession.removeInput(currentInput)
         }
-        
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             print("\(position == .front ? "Front" : "Back") camera not available")
             captureSession.commitConfiguration()
             return
         }
-        
         do {
             let input = try AVCaptureDeviceInput(device: camera)
             captureSession.addInput(input)
-            
-            if position == .back {
-                try camera.lockForConfiguration()
-                camera.videoZoomFactor = 1.5
-                camera.unlockForConfiguration()
-            }
+            try camera.lockForConfiguration()
+            camera.videoZoomFactor = 1.5
+            camera.unlockForConfiguration()
         } catch {
-            print("Error setting up \(position == .front ? "front" : "back") camera input: \(error)")
+            print("Error setting up camera input: \(error)")
             captureSession.commitConfiguration()
             return
         }
@@ -149,13 +139,10 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         let videoOutput = AVCaptureVideoDataOutput()
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
-        
         if let existingOutput = captureSession.outputs.first(where: { $0 is AVCaptureVideoDataOutput }) {
             captureSession.removeOutput(existingOutput)
         }
-        
         captureSession.addOutput(videoOutput)
-        
         captureSession.commitConfiguration()
     }
     
@@ -167,7 +154,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     
     private func setupModel() {
         do {
-            // Replace "bestNMS()" with your actual CoreML model loader if needed.
             let model = try VNCoreMLModel(for: bestNMS().model)
             eyeDetectionRequest = VNCoreMLRequest(model: model, completionHandler: handleDetections)
             eyeDetectionRequest?.imageCropAndScaleOption = .scaleFill
@@ -181,7 +167,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         let buttonHeight: CGFloat = 70
         let xPosition = (view.bounds.width - buttonWidth) / 2
         let yPosition = view.bounds.height - buttonHeight - 50
-        
         captureButton = UIButton(frame: CGRect(x: xPosition, y: yPosition, width: buttonWidth, height: buttonHeight))
         captureButton.backgroundColor = .gray
         captureButton.layer.cornerRadius = 35
@@ -218,7 +203,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         let buttonHeight: CGFloat = 50
         let xPosition = (view.bounds.width - buttonWidth) / 2
         let yPosition = view.bounds.height - buttonHeight - 50
-        
         retakeButton = UIButton(frame: CGRect(x: xPosition, y: yPosition, width: buttonWidth, height: buttonHeight))
         retakeButton.setTitle("Retake", for: .normal)
         retakeButton.backgroundColor = .red
@@ -240,20 +224,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         view.addSubview(saveButton)
     }
     
-    private func setupWhiteBoxView() {
-        let boxSize = CGSize(width: 250, height: 400)
-        whiteBoxView = UIView()
-        whiteBoxView.frame = CGRect(
-            x: (view.bounds.width - boxSize.width) / 2,
-            y: (view.bounds.height - boxSize.height) / 2,
-            width: boxSize.width,
-            height: boxSize.height
-        )
-        whiteBoxView.layer.borderColor = UIColor.white.cgColor
-        whiteBoxView.layer.borderWidth = 2.0
-        view.addSubview(whiteBoxView)
-    }
-    
     private func setupFaceDetection() {
         faceDetectionRequest = VNDetectFaceRectanglesRequest(completionHandler: handleDetections)
     }
@@ -271,7 +241,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         let textFieldHeight: CGFloat = 40
         let xPosition: CGFloat = 20
         let yPosition: CGFloat = captureButton.frame.minY - textFieldHeight - 20
-        
         textField = UITextField(frame: CGRect(x: xPosition, y: yPosition, width: textFieldWidth, height: textFieldHeight))
         textField.borderStyle = .roundedRect
         textField.placeholder = "Enter text here"
@@ -286,15 +255,19 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         let radioButtonHeight: CGFloat = 40
         let xPosition: CGFloat = 20
         let yPosition: CGFloat = switchCameraButton.frame.maxY + 15
-        
-        // The three modes are independent:
-        // "LC" means left closed (i.e. left eye is not visible → result "LC" if only right detections occur),
-        // "RC" means right closed (i.e. right eye is not visible → result "RC" if only left detections occur),
-        // "AC" means alternating (both eyes detected in one‑eye frames at least once).
         radioButtonGroup = UISegmentedControl(items: ["LC", "RC", "AC"])
         radioButtonGroup.frame = CGRect(x: xPosition, y: yPosition, width: radioButtonWidth, height: radioButtonHeight)
         radioButtonGroup.selectedSegmentIndex = 0
         view.addSubview(radioButtonGroup)
+    }
+    
+    // NEW: Setup label to display proximity info (without actual distance)
+    private func setupDistanceLabel() {
+        distanceLabel = UILabel(frame: CGRect(x: 20, y: 100, width: 250, height: 30))
+        distanceLabel.textColor = .green
+        distanceLabel.font = UIFont.boldSystemFont(ofSize: 16)
+        distanceLabel.text = ""
+        view.addSubview(distanceLabel)
     }
     
     // MARK: - Keyboard Handling
@@ -317,16 +290,12 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     // MARK: - Button Actions
     @objc private func toggleFlash() {
         isFlashOn.toggle()
-        
         if currentCameraPosition == .front {
-            // For the front camera, ensure the flash is as bright as possible regardless of the device’s current brightness.
             if isFlashOn {
-                // Save the current brightness and set it to maximum.
                 originalBrightness = UIScreen.main.brightness
                 UIScreen.main.brightness = 1.0
                 flashView.alpha = 1.0
             } else {
-                // Restore the original brightness.
                 UIScreen.main.brightness = originalBrightness
                 flashView.alpha = 0.0
             }
@@ -341,14 +310,12 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                     }
                     backCamera.unlockForConfiguration()
                 } catch {
-                    print("Torch could not be used: \(error)")
+                    print("Torch error: \(error)")
                 }
             }
         }
-        
         captureButton.backgroundColor = isFlashOn ? .yellow : .gray
         captureModeLabel.text = isFlashOn ? "Capture: On" : "Capture: Off"
-        
         if !isFlashOn && currentCameraPosition == .back {
             guard let backCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { return }
             if backCamera.hasTorch {
@@ -357,7 +324,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                     backCamera.torchMode = .off
                     backCamera.unlockForConfiguration()
                 } catch {
-                    print("Torch could not be turned off: \(error)")
+                    print("Torch off error: \(error)")
                 }
             }
         }
@@ -390,11 +357,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         recordedBoundingBoxes.removeAll()
         frameCount = 0
         consecutiveOneEyeFrames = 0
-        // Reset one‑eye counters when retaking
         oneEyeLeftCount = 0
         oneEyeRightCount = 0
-        
-        // For front camera mode, restore the original brightness.
         if currentCameraPosition == .front {
             UIScreen.main.brightness = originalBrightness
         }
@@ -407,18 +371,14 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     }
     
     @objc private func image(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
-        let alertController = UIAlertController(title: "Saved!", message: "Your photo has been saved to your photo library.", preferredStyle: .alert)
+        let alertController = UIAlertController(title: "Saved!", message: "Your photo has been saved.", preferredStyle: .alert)
         alertController.addAction(UIAlertAction(title: "OK", style: .default))
         present(alertController, animated: true)
     }
     
     // MARK: - Alert for Mismatch
     private func showAlert(selected: String, result: String) {
-        let alertController = UIAlertController(
-            title: "Mismatch Detected",
-            message: "You have selected: \(selected),\nBut the detection indicates: \(result)\nKindly recapture :)",
-            preferredStyle: .alert
-        )
+        let alertController = UIAlertController(title: "Mismatch Detected", message: "You selected: \(selected)\nDetection: \(result)\nPlease recapture.", preferredStyle: .alert)
         alertController.addAction(UIAlertAction(title: "OK", style: .default))
         present(alertController, animated: true)
     }
@@ -426,22 +386,31 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     // MARK: - Vision Handling
     private func handleDetections(request: VNRequest, error: Error?) {
         guard let results = request.results as? [VNObservation] else { return }
-        
         DispatchQueue.main.async {
             self.detectionLayer.sublayers?.removeAll()
             
             let faceResults = results.compactMap { $0 as? VNFaceObservation }
             let eyeResults = results.compactMap { $0 as? VNRecognizedObjectObservation }
             
-            // (Optional) Process face detections if needed.
+            // NEW: Update distance label based on detected face proximity
+            if let face = faceResults.first {
+                let distance = self.estimateDistance(from: face)
+                if distance < 20 {
+                    self.distanceLabel.text = "Too Close"
+                } else if distance > 50 {
+                    self.distanceLabel.text = "Too Far"
+                } else {
+                    self.distanceLabel.text = ""
+                }
+            }
+            
             for face in faceResults {
-                let _ = self.transformBoundingBox(face.boundingBox)
+                _ = self.transformBoundingBox(face.boundingBox)
             }
             
             let confidentEyeResults = eyeResults.filter { $0.confidence > 0.6 }
             print("Confident eye results count: \(confidentEyeResults.count)")
             
-            // If flash is on and both eyes are detected with proper spacing, trigger capture.
             if self.isFlashOn && self.areEyesProperlySpaced(confidentEyeResults) {
                 if confidentEyeResults.count == 2 && !self.isCapturingImage {
                     self.isCapturingImage = true
@@ -451,7 +420,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 }
             }
             
-            // When exactly one eye is detected, update our one‑eye counters.
             if confidentEyeResults.count == 1 {
                 if let detection = confidentEyeResults.first {
                     let transformedRect = self.transformBoundingBox(detection.boundingBox)
@@ -463,9 +431,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                     } else {
                         detectedEye = (center.x < midX) ? "left" : "right"
                     }
-                    // IMPORTANT: Use the following mapping:
-                    // If detected eye is "left" → left is visible, so right is closed → increment oneEyeRightCount (which later gives "RC")
-                    // If detected eye is "right" → right is visible, so left is closed → increment oneEyeLeftCount (which later gives "LC")
                     if detectedEye == "left" {
                         self.oneEyeRightCount += 1
                     } else {
@@ -487,61 +452,34 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
             self.captureButton.isEnabled = (oneEyeDetectedInWindow >= self.windowSize / 2)
             self.captureButton.backgroundColor = self.captureButton.isEnabled ? .white : .gray
             
-            // Optionally draw bounding boxes.
             for observation in confidentEyeResults {
                 let transformedRect = self.transformBoundingBox(observation.boundingBox)
-                if self.isRectInsideWhiteBox(rect: transformedRect) {
-                    self.drawBoundingBox(rect: transformedRect, color: UIColor.blue.cgColor, confidence: observation.confidence)
-                    self.recordedBoundingBoxes.append(transformedRect)
-                    if self.recordedBoundingBoxes.count > self.maxFrames {
-                        self.recordedBoundingBoxes.removeFirst()
-                    }
+                self.drawBoundingBox(rect: transformedRect, color: UIColor.blue.cgColor, confidence: observation.confidence)
+                self.recordedBoundingBoxes.append(transformedRect)
+                if self.recordedBoundingBoxes.count > self.maxFrames {
+                    self.recordedBoundingBoxes.removeFirst()
                 }
             }
             
-            // Update the capture result based solely on our one‑eye counters.
             self.updateCaptureResult()
         }
     }
     
     // MARK: - Capture Result Update (Independent Modes)
     private func updateCaptureResult() {
-        var result = ""
-        // Compute detection result based on our one‑eye counters.
-        // If no one‑eye events have occurred, return "None".
         if oneEyeLeftCount == 0 && oneEyeRightCount == 0 {
-            result = "None"
+            captureResult = "None"
+        } else if oneEyeLeftCount > oneEyeRightCount {
+            captureResult = "LC"
+        } else if oneEyeRightCount > oneEyeLeftCount {
+            captureResult = "RC"
+        } else {
+            captureResult = "AC"
         }
-        else if oneEyeLeftCount > 0 && oneEyeRightCount > 0 {
-            // Use a ratio threshold to filter out noise.
-            let minCount = min(oneEyeLeftCount, oneEyeRightCount)
-            let maxCount = max(oneEyeLeftCount, oneEyeRightCount)
-            let ratio = Double(minCount) / Double(maxCount)
-            if ratio < 0.3 {
-                // Dominated by one type:
-                if oneEyeLeftCount > oneEyeRightCount {
-                    // oneEyeLeftCount dominated → events where detected eye was "right" → result "LC"
-                    result = "LC"
-                } else {
-                    // oneEyeRightCount dominated → result "RC"
-                    result = "RC"
-                }
-            } else {
-                result = "AC"
-            }
-        }
-        else if oneEyeLeftCount > 0 {
-            // Only events where detected eye was "right" occurred → result "LC"
-            result = "LC"
-        } else if oneEyeRightCount > 0 {
-            // Only events where detected eye was "left" occurred → result "RC"
-            result = "RC"
-        }
-        captureResult = result
-        print("Updated capture result: \(captureResult)")
+        self.result = captureResult
     }
     
-    /// Convert a normalized Vision bounding box to view coordinates.
+    /// Convert a normalized bounding box to view coordinates.
     private func transformBoundingBox(_ boundingBox: CGRect) -> CGRect {
         let width = boundingBox.width * view.bounds.width
         let height = boundingBox.height * view.bounds.height
@@ -571,25 +509,31 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     
     private func captureImage() {
         let settings = AVCapturePhotoSettings()
-        settings.flashMode = .off
+        settings.isHighResolutionPhotoEnabled = true
         
-        if let availablePreviewPixelFormatTypes = settings.availablePreviewPhotoPixelFormatTypes.first {
+        if let photoOutputConnection = self.photoOutput.connection(with: .video) {
+            if photoOutputConnection.isVideoMirroringSupported {
+                photoOutputConnection.isVideoMirrored = (currentCameraPosition == .front)
+            }
+        }
+        settings.flashMode = isFlashOn ? .on : .off
+        
+        if let photoFormat = settings.availablePreviewPhotoPixelFormatTypes.first {
             settings.previewPhotoFormat = [
-                kCVPixelBufferPixelFormatTypeKey as String: availablePreviewPixelFormatTypes
+                kCVPixelBufferPixelFormatTypeKey as String: photoFormat,
+                kCVPixelBufferWidthKey as String: UIScreen.main.bounds.width * UIScreen.main.scale,
+                kCVPixelBufferHeightKey as String: UIScreen.main.bounds.height * UIScreen.main.scale
             ]
         }
-        
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        
         guard let eyeDetectionRequest = eyeDetectionRequest else {
             print("Error: eyeDetectionRequest is nil")
             return
         }
-        
         let requestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: currentCameraPosition == .front ? .leftMirrored : .right, options: [:])
         do {
             try requestHandler.perform([faceDetectionRequest, eyeDetectionRequest])
@@ -599,11 +543,20 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     }
     
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard let imageData = photo.fileDataRepresentation() else { return }
-        guard let image = UIImage(data: imageData) else { return }
-        
+        guard error == nil else {
+            print("Error capturing photo: \(error!.localizedDescription)")
+            return
+        }
+        guard let imageData = photo.fileDataRepresentation() else {
+            print("Failed to get image data")
+            return
+        }
+        guard let image = UIImage(data: imageData) else {
+            print("Failed to create UIImage from image data")
+            return
+        }
+        print("Captured image size: \(image.size)")
         let overlayedImage = overlayTextAndRadioButton(on: image)
-        
         capturedImageView.image = overlayedImage
         capturedImageView.isHidden = false
         retakeButton.isHidden = false
@@ -612,13 +565,9 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         switchCameraButton.isHidden = true
         detectionLayer.isHidden = true
         captureSession.stopRunning()
-        
         capturedImage = overlayedImage
         isCapturingImage = false
-        
-        // Update result one last time before checking.
         updateCaptureResult()
-        
         let selectedSegmentText = radioButtonGroup.titleForSegment(at: radioButtonGroup.selectedSegmentIndex) ?? ""
         if selectedSegmentText != self.captureResult {
             showAlert(selected: selectedSegmentText, result: self.captureResult)
@@ -628,52 +577,47 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     private func overlayTextAndRadioButton(on image: UIImage) -> UIImage {
         UIGraphicsBeginImageContext(image.size)
         image.draw(at: .zero)
-        
         let context = UIGraphicsGetCurrentContext()
         context?.setFillColor(UIColor.white.cgColor)
         context?.setStrokeColor(UIColor.black.cgColor)
         context?.setLineWidth(2.0)
-        
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.boldSystemFont(ofSize: 150),
             .foregroundColor: UIColor.red
         ]
-        
         let text = textField.text ?? ""
         let selectedSegmentIndex = radioButtonGroup.selectedSegmentIndex
         let selectedSegmentText = radioButtonGroup.titleForSegment(at: selectedSegmentIndex) ?? ""
-        
         let overlayText = "\(text) - \(selectedSegmentText)"
         let textRect = CGRect(x: 30, y: 30, width: image.size.width - 40, height: 200)
         overlayText.draw(in: textRect, withAttributes: textAttributes)
-        
         let overlayedImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
-        
         return overlayedImage ?? image
+    }
+    
+    // NEW: Estimate the distance from the camera to the face using a pinhole camera model.
+    private func estimateDistance(from face: VNFaceObservation) -> CGFloat {
+        let faceWidthNormalized = face.boundingBox.width
+        let faceWidthPixels = faceWidthNormalized * view.bounds.width
+        let actualFaceWidthCm: CGFloat = 16.0   // assumed average face width in cm
+        let focalLengthPixels: CGFloat = 500.0    // rough focal length in pixels (adjust as needed)
+        let distanceCm = (actualFaceWidthCm * focalLengthPixels) / faceWidthPixels
+        return distanceCm
     }
     
     private func areEyesProperlySpaced(_ eyeResults: [VNRecognizedObjectObservation]) -> Bool {
         guard eyeResults.count == 2 else { return false }
-        
         let eye1 = eyeResults[0]
         let eye2 = eyeResults[1]
-        
         let center1 = CGPoint(x: eye1.boundingBox.midX, y: eye1.boundingBox.midY)
         let center2 = CGPoint(x: eye2.boundingBox.midX, y: eye2.boundingBox.midY)
-        
         let dx = center1.x - center2.x
         let dy = center1.y - center2.y
         let distance = sqrt(dx * dx + dy * dy)
-        
         let minDistance: CGFloat = 0.1
-        let maxDistance: CGFloat = 0.3
-        
+        let maxDistance: CGFloat = 0.5
         return distance >= minDistance && distance <= maxDistance
-    }
-    
-    private func isRectInsideWhiteBox(rect: CGRect) -> Bool {
-        return whiteBoxView.frame.contains(rect)
     }
 }
 
