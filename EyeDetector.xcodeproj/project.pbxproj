@@ -20,6 +20,7 @@
 		109C78D62C22215F0089A13E /* FaceOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109C78D52C22215F0089A13E /* FaceOverlayView.swift */; };
 		10E190762BFEA26B00832FB8 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10E190752BFEA26B00832FB8 /* CoreML.framework */; };
 		10E190782BFEA27500832FB8 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10E190772BFEA27500832FB8 /* Vision.framework */; };
+		20C341172E4E88BE002FD8FA /* best.mlmodel in Sources */ = {isa = PBXBuildFile; fileRef = 20C341162E4E88BE002FD8FA /* best.mlmodel */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +39,7 @@
 		109C78D52C22215F0089A13E /* FaceOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceOverlayView.swift; sourceTree = "<group>"; };
 		10E190752BFEA26B00832FB8 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		10E190772BFEA27500832FB8 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
+		20C341162E4E88BE002FD8FA /* best.mlmodel */ = {isa = PBXFileReference; lastKnownFileType = file.mlmodel; path = best.mlmodel; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -93,6 +95,7 @@
 			isa = PBXGroup;
 			children = (
 				109C78B12C12567A0089A13E /* bestNMS.mlmodel */,
+				20C341162E4E88BE002FD8FA /* best.mlmodel */,
 			);
 			path = "ML Models";
 			sourceTree = "<group>";
@@ -182,6 +185,7 @@
 			files = (
 				109C78B22C12567A0089A13E /* bestNMS.mlmodel in Sources */,
 				101C59982BF40924002723EB /* ViewController.swift in Sources */,
+				20C341172E4E88BE002FD8FA /* best.mlmodel in Sources */,
 				109C78D62C22215F0089A13E /* FaceOverlayView.swift in Sources */,
 				101C59942BF40924002723EB /* AppDelegate.swift in Sources */,
 				101C59962BF40924002723EB /* SceneDelegate.swift in Sources */,

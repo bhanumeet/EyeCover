@@ -36,6 +36,13 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     var captureResultLabel: UILabel!
     var distanceLabel: UILabel!  // Label to display proximity info
     
+    // Live eye counter labels
+    var leftEyeCountLabel: UILabel!
+    var rightEyeCountLabel: UILabel!
+    
+    // Flag to start counting eyes only after the camera button is pressed.
+    var shouldCountEyes: Bool = false
+    
     let maxFrames = 100
     var frameCount = 0
     var consecutiveOneEyeFrames: Int = 0
@@ -43,8 +50,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     let windowSize = 10
     
     // One-eye counters:
-    var oneEyeLeftCount: Int = 0   // corresponds to events where detected eye was "left" → result should be "RC"
-    var oneEyeRightCount: Int = 0  // corresponds to events where detected eye was "right" → result should be "LC"
+    var oneEyeLeftCount: Int = 0   // corresponds to events where detected eye was "left" → result should be "LC"
+    var oneEyeRightCount: Int = 0  // corresponds to events where detected eye was "right" → result should be "RC"
     
     // Store the original screen brightness.
     var originalBrightness: CGFloat = UIScreen.main.brightness
@@ -66,7 +73,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         setupCaptureModeLabel()
         setupTextField()
         setupRadioButtons()
-        setupDistanceLabel()  // NEW: Setup label to show proximity info
+        setupDistanceLabel()  // Setup label to show proximity info
+        setupEyeCountLabels() // Setup live left/right eye counter labels
         
         bringButtonsToFront()
         
@@ -87,6 +95,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         view.bringSubviewToFront(captureModeLabel)
         view.bringSubviewToFront(textField)
         view.bringSubviewToFront(radioButtonGroup)
+        view.bringSubviewToFront(leftEyeCountLabel)
+        view.bringSubviewToFront(rightEyeCountLabel)
     }
     
     private func setupFaceOverlay() {
@@ -111,7 +121,10 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         photoOutput = AVCapturePhotoOutput()
         photoOutput.isHighResolutionCaptureEnabled = true
         captureSession.addOutput(photoOutput)
-        captureSession.startRunning()
+        // Start the capture session on a background thread to avoid blocking the UI.
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.captureSession.startRunning()
+        }
     }
     
     private func configureCamera(for position: AVCaptureDevice.Position) {
@@ -154,7 +167,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     
     private func setupModel() {
         do {
-            let model = try VNCoreMLModel(for: bestNMS().model)
+            let model = try VNCoreMLModel(for: best().model)
             eyeDetectionRequest = VNCoreMLRequest(model: model, completionHandler: handleDetections)
             eyeDetectionRequest?.imageCropAndScaleOption = .scaleFill
         } catch {
@@ -261,13 +274,33 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         view.addSubview(radioButtonGroup)
     }
     
-    // NEW: Setup label to display proximity info (without actual distance)
+    // Setup label to display proximity info (without actual distance)
     private func setupDistanceLabel() {
         distanceLabel = UILabel(frame: CGRect(x: 20, y: 100, width: 250, height: 30))
         distanceLabel.textColor = .green
         distanceLabel.font = UIFont.boldSystemFont(ofSize: 16)
         distanceLabel.text = ""
         view.addSubview(distanceLabel)
+    }
+    
+    // Setup live left and right eye counter labels in red, positioned below the radio buttons.
+    private func setupEyeCountLabels() {
+        let labelWidth: CGFloat = 150
+        let labelHeight: CGFloat = 30
+        let xPositionLeft: CGFloat = 20
+        let xPositionRight: CGFloat = view.bounds.width - labelWidth - 20
+        let yPosition = radioButtonGroup.frame.maxY + 10
+        leftEyeCountLabel = UILabel(frame: CGRect(x: xPositionLeft, y: yPosition, width: labelWidth, height: labelHeight))
+        rightEyeCountLabel = UILabel(frame: CGRect(x: xPositionRight, y: yPosition, width: labelWidth, height: labelHeight))
+        leftEyeCountLabel.textColor = .red
+        rightEyeCountLabel.textColor = .red
+        leftEyeCountLabel.font = UIFont.boldSystemFont(ofSize: 16)
+        rightEyeCountLabel.font = UIFont.boldSystemFont(ofSize: 16)
+        // Initially set to zero.
+        leftEyeCountLabel.text = "Right Eye: 0"
+        rightEyeCountLabel.text = "Left Eye: 0"
+        view.addSubview(leftEyeCountLabel)
+        view.addSubview(rightEyeCountLabel)
     }
     
     // MARK: - Keyboard Handling
@@ -290,6 +323,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     // MARK: - Button Actions
     @objc private func toggleFlash() {
         isFlashOn.toggle()
+        // Start counting eyes only when the camera button is pressed (flash turned on)
+        shouldCountEyes = isFlashOn
         if currentCameraPosition == .front {
             if isFlashOn {
                 originalBrightness = UIScreen.main.brightness
@@ -350,7 +385,10 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         captureButton.isHidden = false
         switchCameraButton.isHidden = false
         detectionLayer.isHidden = false
-        captureSession.startRunning()
+        // Start the capture session on a background thread
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.captureSession.startRunning()
+        }
         isCapturingImage = false
         captureButton.backgroundColor = .gray
         captureModeLabel.text = "Capture: Off"
@@ -359,6 +397,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         consecutiveOneEyeFrames = 0
         oneEyeLeftCount = 0
         oneEyeRightCount = 0
+        // Reset counter flag when retaking photo
+        shouldCountEyes = false
         if currentCameraPosition == .front {
             UIScreen.main.brightness = originalBrightness
         }
@@ -392,7 +432,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
             let faceResults = results.compactMap { $0 as? VNFaceObservation }
             let eyeResults = results.compactMap { $0 as? VNRecognizedObjectObservation }
             
-            // NEW: Update distance label based on detected face proximity
+            // Update distance label based on detected face proximity
             if let face = faceResults.first {
                 let distance = self.estimateDistance(from: face)
                 if distance < 20 {
@@ -461,20 +501,51 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 }
             }
             
+            //debugging on-screen
+            // Update the live eye counter labels only if counting is enabled.
+            if self.shouldCountEyes {
+                self.leftEyeCountLabel.text = "Right Eye: \(self.oneEyeLeftCount)"
+                self.rightEyeCountLabel.text = "Left Eye: \(self.oneEyeRightCount)"
+            }
+            
             self.updateCaptureResult()
         }
     }
     
-    // MARK: - Capture Result Update (Independent Modes)
+    // MARK: - Capture Result Update (Mode-Specific)
     private func updateCaptureResult() {
-        if oneEyeLeftCount == 0 && oneEyeRightCount == 0 {
+        let selectedMode = radioButtonGroup.titleForSegment(at: radioButtonGroup.selectedSegmentIndex) ?? "LC"
+        switch selectedMode {
+        case "LC":
+            if oneEyeLeftCount >= 10 && oneEyeRightCount <= 5 {
+                captureResult = "LC"
+            } else if oneEyeRightCount >= 10 && oneEyeLeftCount <= 5 {
+                captureResult = "Did you Mean RC"
+            } else if oneEyeLeftCount >= 10 && oneEyeRightCount >= 10 {
+                captureResult = "Did You Mean AC"
+            } else {
+                captureResult = "None"
+            }
+        case "RC":
+            if oneEyeRightCount >= 10 && oneEyeLeftCount <= 5 {
+                captureResult = "RC"
+            } else if oneEyeLeftCount >= 10 && oneEyeRightCount <= 5 {
+                captureResult = "LC"
+            } else if oneEyeLeftCount >= 10 && oneEyeRightCount >= 10 {
+                captureResult = "Did You Mean AC"
+            } else {
+                captureResult = "None"
+            }
+        case "AC":
+            if oneEyeLeftCount >= 10 && oneEyeRightCount >= 10 {
+                captureResult = "AC"
+            } else if oneEyeLeftCount >= 10 && oneEyeRightCount <= 5 {
+                captureResult = "Did you Mean LC"
+            } else if oneEyeRightCount >= 10 && oneEyeLeftCount <= 5 {
+                captureResult = "Did you Mean RC"
+            }
+        default:
             captureResult = "None"
-        } else if oneEyeLeftCount > oneEyeRightCount {
-            captureResult = "LC"
-        } else if oneEyeRightCount > oneEyeLeftCount {
-            captureResult = "RC"
-        } else {
-            captureResult = "AC"
         }
         self.result = captureResult
     }
@@ -567,11 +638,19 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         captureSession.stopRunning()
         capturedImage = overlayedImage
         isCapturingImage = false
+        
+        // First, update the capture result based on the counters.
         updateCaptureResult()
         let selectedSegmentText = radioButtonGroup.titleForSegment(at: radioButtonGroup.selectedSegmentIndex) ?? ""
         if selectedSegmentText != self.captureResult {
             showAlert(selected: selectedSegmentText, result: self.captureResult)
         }
+        
+        // After processing is done, reset the counters.
+        oneEyeLeftCount = 0
+        oneEyeRightCount = 0
+        leftEyeCountLabel.text = "Right Eye: 0"
+        rightEyeCountLabel.text = "Left Eye: 0"
     }
     
     private func overlayTextAndRadioButton(on image: UIImage) -> UIImage {
@@ -596,7 +675,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         return overlayedImage ?? image
     }
     
-    // NEW: Estimate the distance from the camera to the face using a pinhole camera model.
+    // Estimate the distance from the camera to the face using a pinhole camera model.
     private func estimateDistance(from face: VNFaceObservation) -> CGFloat {
         let faceWidthNormalized = face.boundingBox.width
         let faceWidthPixels = faceWidthNormalized * view.bounds.width
